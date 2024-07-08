@@ -15,6 +15,9 @@ class Program
     static List<UrlInfo> urls;
     static List<Timer> timers;
     static List<RequestInfo> requestInfos = new List<RequestInfo>();
+    static Random random = new Random();
+    static List<Timer> claimTimers;
+    static bool isDisplaying = false;
 
     static async Task Main(string[] args)
     {
@@ -38,6 +41,7 @@ class Program
                 .ToList();
 
             timers = new List<Timer>();
+            claimTimers = new List<Timer>();
             await InitTokens();
 
             Console.ReadLine();
@@ -76,6 +80,7 @@ class Program
     {
         try
         {
+            Thread.Sleep(1000);
             var uri = new Uri(url.Path);
             var query = HttpUtility.ParseQueryString(uri.Fragment.TrimStart('#'));
             var tgWebAppData = query["tgWebAppData"];
@@ -91,6 +96,9 @@ class Program
             var userData = JObject.Parse(userDataJson);
             var devAuthData = (long)userData["id"];
             var firstName = (string)userData["first_name"];
+
+            var claimTimer = new Timer(async _ => await SendClaimTapsRequest(devAuthData, tgWebAppData, firstName), null, TimeSpan.Zero, TimeSpan.FromMinutes(1));
+            claimTimers.Add(claimTimer);
 
             var client = new RestClient("https://cexp.cex.io");
             var request = new RestRequest("/api/startFarm", Method.Post);
@@ -186,6 +194,10 @@ class Program
 
     static void DisplayRemainingTimes()
     {
+        if (isDisplaying)
+            return;
+
+        isDisplaying = true;
         Task.Run(async () =>
         {
             while (true)
@@ -216,6 +228,7 @@ class Program
     {
         try
         {
+            Thread.Sleep(1000);
             var client = new RestClient("https://cexp.cex.io");
             var request = new RestRequest("/api/claimFarm", Method.Post);
             request.AddHeader("accept", "application/json, text/plain, */*");
@@ -259,6 +272,124 @@ class Program
         catch (Exception ex)
         {
             LogError($"An error occurred while sending ClaimFarm request. Error: {ex.Message}");
+        }
+    }
+
+    static async Task SendClaimTapsRequest(long devAuthData, string tgWebAppData, string firstName)
+    {
+        try
+        {
+            Thread.Sleep(1000);
+            var availableTaps = await GetAvailableTaps(devAuthData, tgWebAppData);
+            if (availableTaps > 0)
+            {
+                int taps;
+                if (availableTaps < 92)
+                {
+                    taps = availableTaps;
+                }
+                else
+                {
+                    taps = random.Next(60, 92);
+                }
+
+                var client = new RestClient("https://cexp.cex.io");
+                var request = new RestRequest("/api/claimTaps", Method.Post);
+                request.AddHeader("accept", "application/json, text/plain, */*");
+                request.AddHeader("accept-language", "en-US,en;q=0.9,fa;q=0.8");
+                request.AddHeader("content-type", "application/json");
+                request.AddHeader("cookie", "SL_G_WPT_TO=fa; SL_GWPT_Show_Hide_tmp=1; SL_wptGlobTipTmp=1");
+                request.AddHeader("dnt", "1");
+                request.AddHeader("origin", "https://cexp.cex.io");
+                request.AddHeader("priority", "u=1, i");
+                request.AddHeader("referer", "https://cexp.cex.io/");
+                request.AddHeader("sec-fetch-dest", "empty");
+                request.AddHeader("sec-fetch-mode", "cors");
+                request.AddHeader("sec-fetch-site", "same-origin");
+                request.AddHeader("user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1");
+
+                var body = new
+                {
+                    devAuthData = devAuthData,
+                    authData = tgWebAppData,
+                    data = new { taps = taps }
+                };
+
+                request.AddJsonBody(body);
+
+                var response = await client.ExecuteAsync(request);
+
+                if (response.IsSuccessful)
+                {
+                    var availableTapsAfterClaim = await GetAvailableTaps(devAuthData, tgWebAppData);
+
+                    LogRequest(firstName, $"Available Taps After Claim: {availableTapsAfterClaim}");
+
+                    Console.WriteLine($"[{firstName}] => Available Taps After Claim: {availableTapsAfterClaim}");
+                }
+                else
+                {
+                    LogRequest(firstName, $"ClaimTaps Request failed. Response: {response.Content}");
+                    Console.WriteLine($"[{firstName}] => ClaimTaps Request failed. Response: {response.Content}");
+                }
+
+                await Task.Delay(500);
+            }
+        }
+        catch (Exception ex)
+        {
+            LogError($"An error occurred while sending ClaimTaps request. Error: {ex.Message}");
+        }
+    }
+
+    static async Task<int> GetAvailableTaps(long devAuthData, string tgWebAppData)
+    {
+        try
+        {
+            Thread.Sleep(1300);
+            var client = new RestClient("https://cexp.cex.io");
+            var request = new RestRequest("/api/getUserInfo", Method.Post);
+            request.AddHeader("accept", "application/json, text/plain, */*");
+            request.AddHeader("accept-language", "en-US,en;q=0.9,fa;q=0.8");
+            request.AddHeader("content-type", "application/json");
+            request.AddHeader("cookie", "SL_G_WPT_TO=fa; SL_GWPT_Show_Hide_tmp=1; SL_wptGlobTipTmp=1");
+            request.AddHeader("dnt", "1");
+            request.AddHeader("origin", "https://cexp.cex.io");
+            request.AddHeader("priority", "u=1, i");
+            request.AddHeader("referer", "https://cexp.cex.io/");
+            request.AddHeader("sec-fetch-dest", "empty");
+            request.AddHeader("sec-fetch-mode", "cors");
+            request.AddHeader("sec-fetch-site", "same-origin");
+            request.AddHeader("user-agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1");
+
+            var body = new
+            {
+                devAuthData = devAuthData,
+                authData = tgWebAppData,
+                data = new { },
+                platform = "ios"
+            };
+
+            request.AddJsonBody(body);
+
+            var response = await client.ExecuteAsync(request);
+
+            if (response.IsSuccessful)
+            {
+                var jsonResponse = JObject.Parse(response.Content);
+                int availableTaps = (int)jsonResponse["data"]["availableTaps"];
+                return availableTaps;
+            }
+            else
+            {
+                LogRequest("System", $"GetAvailableTaps Request failed. Response: {response.Content}");
+                return 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            LogError($"An error occurred while getting available taps. Error: {ex.Message}");
+            return 0;
         }
     }
 
