@@ -1,16 +1,9 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Net;
-using System.Net.Http;
-using System.Threading;
-using System.Threading.Tasks;
+﻿using ConsoleTables;
 using Humanizer;
 using Newtonsoft.Json.Linq;
 using RestSharp;
+using System.Net;
 using System.Web;
-using ConsoleTables;
 
 class Program
 {
@@ -31,7 +24,7 @@ class Program
             var currentDirectory = AppDomain.CurrentDomain.BaseDirectory;
             var configPath = Path.Combine(currentDirectory, "config.json");
 
-             if (!File.Exists(configPath))
+            if (!File.Exists(configPath))
             {
                 File.WriteAllText(configPath, "{\r\n  \"useproxy\": false,\r\n  \"proxy\": \"http://127.0.0.1:40000\"\r\n}");
             }
