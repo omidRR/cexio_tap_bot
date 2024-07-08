@@ -2,6 +2,8 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Humanizer;
@@ -18,12 +20,26 @@ class Program
     static Random random = new Random();
     static List<Timer> claimTimers;
     static bool isDisplaying = false;
+    static bool useProxy;
+    static string proxyAddress;
+    static readonly object logLock = new object();
 
     static async Task Main(string[] args)
     {
         try
         {
             var currentDirectory = AppDomain.CurrentDomain.BaseDirectory;
+            var configPath = Path.Combine(currentDirectory, "config.json");
+
+             if (!File.Exists(configPath))
+            {
+                File.WriteAllText(configPath, "{\r\n  \"useproxy\": false,\r\n  \"proxy\": \"http://127.0.0.1:40000\"\r\n}");
+            }
+
+            var configJson = File.ReadAllText(configPath);
+            var config = JObject.Parse(configJson);
+            useProxy = (bool)config["useproxy"];
+            proxyAddress = (string)config["proxy"];
 
             var filePath = Path.Combine(currentDirectory, "urls.txt");
 
@@ -74,6 +90,22 @@ class Program
         {
             LogError($"An error occurred in InitTokens: {ex.Message}");
         }
+    }
+
+    static HttpClientHandler CreateHttpClientHandler()
+    {
+        var handler = new HttpClientHandler();
+
+        if (useProxy)
+        {
+            handler.Proxy = new WebProxy(proxyAddress);
+            handler.UseProxy = true;
+
+            var logMessage = $"Using proxy: {proxyAddress}";
+            LogProxyUsage(logMessage);
+        }
+
+        return handler;
     }
 
     static async Task SendRequest(UrlInfo url)
@@ -149,7 +181,15 @@ class Program
             else
             {
                 var jsonResponse = JObject.Parse(response.Content);
-                if ((string)jsonResponse["status"] == "error" && (string)jsonResponse["data"]["reason"] == "Farm is already started")
+                if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                {
+                    LogRequest(firstName, $"Too many requests. Retrying in 30 seconds for URL: {url.Path}");
+                    Console.WriteLine($"[{firstName}] => Too many requests. Retrying in 30 seconds.");
+
+                    await Task.Delay(TimeSpan.FromSeconds(30));
+                    await SendRequest(url);
+                }
+                else if ((string)jsonResponse["status"] == "error" && (string)jsonResponse["data"]["reason"] == "Farm is already started")
                 {
                     Console.WriteLine($"[{firstName}] => Farm is already started. Will retry in the next cycle.");
 
@@ -265,8 +305,20 @@ class Program
             }
             else
             {
-                LogRequest(firstName, $"ClaimFarm Request failed. Response: {response.Content}");
-                Console.WriteLine($"[{firstName}] => ClaimFarm Request failed. Response: {response.Content}");
+                var jsonResponse = JObject.Parse(response.Content);
+                if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                {
+                    LogRequest(firstName, $"Too many requests. Retrying in 30 seconds for ClaimFarm.");
+                    Console.WriteLine($"[{firstName}] => Too many requests. Retrying in 30 seconds.");
+
+                    await Task.Delay(TimeSpan.FromSeconds(30));
+                    await SendClaimRequest(devAuthData, tgWebAppData, firstName, url);
+                }
+                else
+                {
+                    LogRequest(firstName, $"ClaimFarm Request failed. Response: {response.Content}");
+                    Console.WriteLine($"[{firstName}] => ClaimFarm Request failed. Response: {response.Content}");
+                }
             }
         }
         catch (Exception ex)
@@ -284,16 +336,20 @@ class Program
             if (availableTaps > 0)
             {
                 int taps;
-                if (availableTaps < 92)
+                if (availableTaps < 60)
                 {
                     taps = availableTaps;
                 }
                 else
                 {
-                    taps = random.Next(60, 92);
+                    taps = random.Next(40, 60);
                 }
 
-                var client = new RestClient("https://cexp.cex.io");
+                var options = new RestClientOptions("https://cexp.cex.io")
+                {
+                    ConfigureMessageHandler = _ => CreateHttpClientHandler()
+                };
+                var client = new RestClient(options);
                 var request = new RestRequest("/api/claimTaps", Method.Post);
                 request.AddHeader("accept", "application/json, text/plain, */*");
                 request.AddHeader("accept-language", "en-US,en;q=0.9,fa;q=0.8");
@@ -329,11 +385,24 @@ class Program
                 }
                 else
                 {
-                    LogRequest(firstName, $"ClaimTaps Request failed. Response: {response.Content}");
-                    Console.WriteLine($"[{firstName}] => ClaimTaps Request failed. Response: {response.Content}");
-                }
+                    if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                    {
+                        LogRequest(firstName, $"Too many requests. Retrying in 30 seconds for ClaimTaps.");
+                        Console.WriteLine($"[{firstName}] => Too many requests. Retrying in 30 seconds.");
 
-                await Task.Delay(500);
+                        await Task.Delay(TimeSpan.FromSeconds(30));
+                        await SendClaimTapsRequest(devAuthData, tgWebAppData, firstName);
+                    }
+                    else
+                    {
+                        LogRequest(firstName, $"ClaimTaps Request failed. Response: {response.Content}");
+                        Console.WriteLine($"[{firstName}] => ClaimTaps Request failed. Response: {response.Content}");
+                    }
+                }
+            }
+            else
+            {
+                Console.WriteLine($"[{firstName}] => No available taps to claim.");
             }
         }
         catch (Exception ex)
@@ -347,7 +416,11 @@ class Program
         try
         {
             Thread.Sleep(1300);
-            var client = new RestClient("https://cexp.cex.io");
+            var options = new RestClientOptions("https://cexp.cex.io")
+            {
+                ConfigureMessageHandler = _ => CreateHttpClientHandler()
+            };
+            var client = new RestClient(options);
             var request = new RestRequest("/api/getUserInfo", Method.Post);
             request.AddHeader("accept", "application/json, text/plain, */*");
             request.AddHeader("accept-language", "en-US,en;q=0.9,fa;q=0.8");
@@ -368,6 +441,7 @@ class Program
                 authData = tgWebAppData,
                 data = new { },
                 platform = "ios"
+
             };
 
             request.AddJsonBody(body);
@@ -382,51 +456,89 @@ class Program
             }
             else
             {
-                LogRequest("System", $"GetAvailableTaps Request failed. Response: {response.Content}");
-                return 0;
+                if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                {
+                    LogRequest("System", $"Too many requests. Retrying in 30 seconds for AvailableTaps.");
+                    Console.WriteLine($"[System] => Too many requests. Retrying in 30 seconds.");
+
+                    await Task.Delay(TimeSpan.FromSeconds(30));
+                    return await GetAvailableTaps(devAuthData, tgWebAppData);
+                }
+                else
+                {
+                    LogRequest("System", $"AvailableTaps Request failed. Response: {response.Content}");
+                    Console.WriteLine($"[System] => AvailableTaps Request failed. Response: {response.Content}");
+                    return 0;
+                }
             }
         }
         catch (Exception ex)
         {
-            LogError($"An error occurred while getting available taps. Error: {ex.Message}");
+            LogError($"An error occurred while getting AvailableTaps. Error: {ex.Message}");
             return 0;
         }
     }
 
-    static void LogRequest(string firstName, string message)
+    static void LogRequest(string userName, string message)
     {
-        var currentDirectory = AppDomain.CurrentDomain.BaseDirectory;
-        var logFilePath = Path.Combine(currentDirectory, "log.txt");
-        var logMessage = $"[{firstName}] => {message}";
-
-        lock (requestInfos)
-        {
-            File.AppendAllText(logFilePath, logMessage + Environment.NewLine);
-        }
+        var logFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs.txt");
+        ManageLogSize(logFilePath);
+        var logMessage = $"[{DateTime.Now}] [{userName}] => {message}";
+        AppendLog(logFilePath, logMessage);
     }
 
     static void LogError(string message)
     {
-        var currentDirectory = AppDomain.CurrentDomain.BaseDirectory;
-        var logFilePath = Path.Combine(currentDirectory, "log.txt");
-        var logMessage = $"[ERROR] => {message}";
+        var logFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "error_logs.txt");
+        ManageLogSize(logFilePath);
+        var logMessage = $"[{DateTime.Now}] [ERROR] => {message}";
+        AppendLog(logFilePath, logMessage);
+    }
 
-        lock (requestInfos)
+    static void LogProxyUsage(string message)
+    {
+        var logFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "proxy_logs.txt");
+        ManageLogSize(logFilePath);
+        var logMessage = $"[{DateTime.Now}] [PROXY] => {message}";
+        AppendLog(logFilePath, logMessage);
+    }
+
+    static void ManageLogSize(string logFilePath)
+    {
+        const long maxLogSize = 10 * 1024 * 1024; // 10 MB
+
+        lock (logLock)
+        {
+            if (File.Exists(logFilePath))
+            {
+                var fileInfo = new FileInfo(logFilePath);
+                if (fileInfo.Length > maxLogSize)
+                {
+                    File.WriteAllText(logFilePath, string.Empty); // Clear the file
+                }
+            }
+        }
+    }
+
+    static void AppendLog(string logFilePath, string logMessage)
+    {
+        lock (logLock)
         {
             File.AppendAllText(logFilePath, logMessage + Environment.NewLine);
         }
     }
 
-    class UrlInfo
-    {
-        public string Path { get; set; }
-        public string Token { get; set; }
-    }
+}
 
-    class RequestInfo
-    {
-        public UrlInfo Url { get; set; }
-        public string FirstName { get; set; }
-        public DateTime NextRequestTime { get; set; }
-    }
+class UrlInfo
+{
+    public string Path { get; set; }
+    public string Token { get; set; }
+}
+
+class RequestInfo
+{
+    public UrlInfo Url { get; set; }
+    public string FirstName { get; set; }
+    public DateTime NextRequestTime { get; set; }
 }
