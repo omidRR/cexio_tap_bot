@@ -105,7 +105,7 @@ class Program
     {
         try
         {
-            Thread.Sleep(1000);
+            Thread.Sleep(4000);
             var uri = new Uri(url.Path);
             var query = HttpUtility.ParseQueryString(uri.Fragment.TrimStart('#'));
             var tgWebAppData = query["tgWebAppData"];
@@ -122,10 +122,13 @@ class Program
             var devAuthData = (long)userData["id"];
             var firstName = (string)userData["first_name"];
 
-            var claimTimer = new Timer(async _ => await SendClaimTapsRequest(devAuthData, tgWebAppData, firstName), null, TimeSpan.Zero, TimeSpan.FromMinutes(1));
+            var claimTimer = new Timer(async _ => await SendClaimTapsRequest(devAuthData, tgWebAppData, firstName), null, TimeSpan.Zero, TimeSpan.FromMinutes(2));
             claimTimers.Add(claimTimer);
-
-            var client = new RestClient("https://cexp.cex.io");
+            var options = new RestClientOptions("https://cexp.cex.io")
+            {
+                ConfigureMessageHandler = _ => CreateHttpClientHandler()
+            };
+            var client = new RestClient(options);
             var request = new RestRequest("/api/startFarm", Method.Post);
             request.AddHeader("accept", "application/json, text/plain, */*");
             request.AddHeader("accept-language", "en-US,en;q=0.9,fa;q=0.8");
@@ -176,10 +179,10 @@ class Program
                 var jsonResponse = JObject.Parse(response.Content);
                 if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
                 {
-                    LogRequest(firstName, $"Too many requests. Retrying in 30 seconds for URL: {url.Path}");
-                    Console.WriteLine($"[{firstName}] => Too many requests. Retrying in 30 seconds.");
+                    LogRequest(firstName, $"Too many requests. Retrying in 60 seconds for URL: {url.Path}");
+                    Console.WriteLine($"[{firstName}] => Too many requests. Retrying in 60 seconds.");
 
-                    await Task.Delay(TimeSpan.FromSeconds(30));
+                    await Task.Delay(TimeSpan.FromSeconds(60));
                     await SendRequest(url);
                 }
                 else if ((string)jsonResponse["status"] == "error" && (string)jsonResponse["data"]["reason"] == "Farm is already started")
@@ -252,7 +255,7 @@ class Program
                 table.Write();
                 Console.WriteLine($"Count: {requestInfos.Count}");
                 Console.WriteLine();
-                await Task.Delay(20000);
+                await Task.Delay(30000);
             }
         });
     }
@@ -261,8 +264,12 @@ class Program
     {
         try
         {
-            Thread.Sleep(1000);
-            var client = new RestClient("https://cexp.cex.io");
+            Thread.Sleep(4000);
+            var options = new RestClientOptions("https://cexp.cex.io")
+            {
+                ConfigureMessageHandler = _ => CreateHttpClientHandler()
+            };
+            var client = new RestClient(options);
             var request = new RestRequest("/api/claimFarm", Method.Post);
             request.AddHeader("accept", "application/json, text/plain, */*");
             request.AddHeader("accept-language", "en-US,en;q=0.9,fa;q=0.8");
@@ -324,7 +331,7 @@ class Program
     {
         try
         {
-            Thread.Sleep(1000);
+            Thread.Sleep(4000);
             var availableTaps = await GetAvailableTaps(devAuthData, tgWebAppData);
             if (availableTaps > 0)
             {
@@ -408,7 +415,7 @@ class Program
     {
         try
         {
-            Thread.Sleep(1300);
+            Thread.Sleep(4300);
             var options = new RestClientOptions("https://cexp.cex.io")
             {
                 ConfigureMessageHandler = _ => CreateHttpClientHandler()
@@ -451,10 +458,10 @@ class Program
             {
                 if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
                 {
-                    LogRequest("System", $"Too many requests. Retrying in 30 seconds for AvailableTaps.");
-                    Console.WriteLine($"[System] => Too many requests. Retrying in 30 seconds.");
+                    LogRequest("System", $"Too many requests. Retrying in 60 seconds for AvailableTaps.");
+                    Console.WriteLine($"[System] => Too many requests. Retrying in 60 seconds.");
 
-                    await Task.Delay(TimeSpan.FromSeconds(30));
+                    await Task.Delay(TimeSpan.FromSeconds(60));
                     return await GetAvailableTaps(devAuthData, tgWebAppData);
                 }
                 else
