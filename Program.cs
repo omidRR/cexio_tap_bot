@@ -65,25 +65,42 @@ class Program
     {
         try
         {
-            var tasks = urls.Select(async url =>
+            foreach (var url in urls)
             {
                 try
                 {
                     await SendRequest(url);
+                    Thread.Sleep(3000);
+                    var uri = new Uri(url.Path);
+                    var query = HttpUtility.ParseQueryString(uri.Fragment.TrimStart('#'));
+                    var tgWebAppData = query["tgWebAppData"];
+                    if (!string.IsNullOrEmpty(tgWebAppData))
+                    {
+                        var decodedData = HttpUtility.UrlDecode(tgWebAppData);
+                        var keyValuePairs = HttpUtility.ParseQueryString(decodedData);
+                        var userDataJson = keyValuePairs["user"];
+                        var userData = JObject.Parse(userDataJson);
+                        var devAuthData = (long)userData["id"];
+                        var firstName = (string)userData["first_name"];
+
+                        var claimTimer = new Timer(async _ => await SendClaimTapsRequest(devAuthData, tgWebAppData, firstName), null, TimeSpan.Zero, TimeSpan.FromMinutes(5));
+                        claimTimers.Add(claimTimer);
+                    }
+                    Thread.Sleep(2000);
+                    await Task.Delay(10000);
                 }
                 catch (Exception ex)
                 {
                     LogError($"An error occurred while processing URL: {url.Path}. Error: {ex.Message}");
                 }
-            });
-
-            await Task.WhenAll(tasks);
+            }
         }
         catch (Exception ex)
         {
             LogError($"An error occurred in InitTokens: {ex.Message}");
         }
     }
+
 
     static HttpClientHandler CreateHttpClientHandler()
     {
@@ -105,8 +122,7 @@ class Program
     {
         try
         {
-            Thread.Sleep(4000);
-            var uri = new Uri(url.Path);
+            Thread.Sleep(7000); var uri = new Uri(url.Path);
             var query = HttpUtility.ParseQueryString(uri.Fragment.TrimStart('#'));
             var tgWebAppData = query["tgWebAppData"];
             if (string.IsNullOrEmpty(tgWebAppData))
@@ -121,9 +137,6 @@ class Program
             var userData = JObject.Parse(userDataJson);
             var devAuthData = (long)userData["id"];
             var firstName = (string)userData["first_name"];
-
-            var claimTimer = new Timer(async _ => await SendClaimTapsRequest(devAuthData, tgWebAppData, firstName), null, TimeSpan.Zero, TimeSpan.FromMinutes(2));
-            claimTimers.Add(claimTimer);
             var options = new RestClientOptions("https://cexp.cex.io")
             {
                 ConfigureMessageHandler = _ => CreateHttpClientHandler()
@@ -161,11 +174,11 @@ class Program
                 Console.WriteLine($"[{firstName}] => {jsonResponse}");
 
                 var farmStartedAt = (DateTime)jsonResponse["data"]["farmStartedAt"];
-                var nextRequestTime = farmStartedAt.AddMinutes(242);
+                var nextRequestTime = farmStartedAt.AddMinutes(20);
 
                 if (nextRequestTime < DateTime.Now)
                 {
-                    nextRequestTime = DateTime.Now.AddMinutes(242);
+                    nextRequestTime = DateTime.Now.AddMinutes(20);
                 }
 
                 UpdateRequestInfo(url, firstName, nextRequestTime);
@@ -173,29 +186,46 @@ class Program
 
                 var timer = new Timer(async _ => await SendRequest(url), null, nextRequestTime - DateTime.Now, TimeSpan.FromMilliseconds(-1));
                 timers.Add(timer);
+                await SendClaimRequest(devAuthData, tgWebAppData, firstName, url);
+
             }
             else
             {
-                var jsonResponse = JObject.Parse(response.Content);
+                JObject jsonResponse = null;
+                try
+                {
+                    jsonResponse = JObject.Parse(response.Content);
+
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine("Sleep 90S");
+                    await Task.Delay(TimeSpan.FromSeconds(90));
+                    Thread.Sleep(90000);
+                    await SendRequest(url);
+
+                }
                 if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
                 {
-                    LogRequest(firstName, $"Too many requests. Retrying in 60 seconds for URL: {url.Path}");
-                    Console.WriteLine($"[{firstName}] => Too many requests. Retrying in 60 seconds.");
+                    LogRequest(firstName, $"Too many requests. Retrying in 90 seconds for URL: {url.Path}");
+                    Console.WriteLine($"[{firstName}] => Too many requests. Retrying in 90 seconds.");
 
-                    await Task.Delay(TimeSpan.FromSeconds(60));
+                    await Task.Delay(TimeSpan.FromSeconds(90));
+                    Thread.Sleep(90000);
                     await SendRequest(url);
                 }
                 else if ((string)jsonResponse["status"] == "error" && (string)jsonResponse["data"]["reason"] == "Farm is already started")
                 {
                     Console.WriteLine($"[{firstName}] => Farm is already started. Will retry in the next cycle.");
 
-                    var nextRequestTime = DateTime.Now.AddMinutes(242);
+                    var nextRequestTime = DateTime.Now.AddMinutes(30);
                     UpdateRequestInfo(url, firstName, nextRequestTime);
                     DisplayRemainingTimes();
 
                     var timer = new Timer(async _ => await SendRequest(url), null, nextRequestTime - DateTime.Now, TimeSpan.FromMilliseconds(-1));
                     timers.Add(timer);
-
+                    await Task.Delay(TimeSpan.FromSeconds(3));
+                    Thread.Sleep(3000);
                     await SendClaimRequest(devAuthData, tgWebAppData, firstName, url);
                 }
                 else
@@ -312,6 +342,7 @@ class Program
                     Console.WriteLine($"[{firstName}] => Too many requests. Retrying in 30 seconds.");
 
                     await Task.Delay(TimeSpan.FromSeconds(30));
+                    Thread.Sleep(30000);
                     await SendClaimRequest(devAuthData, tgWebAppData, firstName, url);
                 }
                 else
@@ -331,7 +362,7 @@ class Program
     {
         try
         {
-            Thread.Sleep(4000);
+            Thread.Sleep(3000);
             var availableTaps = await GetAvailableTaps(devAuthData, tgWebAppData);
             if (availableTaps > 0)
             {
@@ -377,6 +408,7 @@ class Program
 
                 if (response.IsSuccessful)
                 {
+                    Thread.Sleep(5000);
                     var availableTapsAfterClaim = await GetAvailableTaps(devAuthData, tgWebAppData);
 
                     LogRequest(firstName, $"Available Taps After Claim: {availableTapsAfterClaim}");
@@ -387,10 +419,12 @@ class Program
                 {
                     if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
                     {
-                        LogRequest(firstName, $"Too many requests. Retrying in 30 seconds for ClaimTaps.");
-                        Console.WriteLine($"[{firstName}] => Too many requests. Retrying in 30 seconds.");
+                        LogRequest(firstName, $"Too many requests. Retrying in 60 seconds for ClaimTaps.");
+                        Console.WriteLine($"[{firstName}] => Too many requests. Retrying in 60 seconds.");
 
-                        await Task.Delay(TimeSpan.FromSeconds(30));
+                        await Task.Delay(TimeSpan.FromSeconds(60));
+                        Thread.Sleep(60000);
+
                         await SendClaimTapsRequest(devAuthData, tgWebAppData, firstName);
                     }
                     else
@@ -415,7 +449,7 @@ class Program
     {
         try
         {
-            Thread.Sleep(4300);
+            Thread.Sleep(10300);
             var options = new RestClientOptions("https://cexp.cex.io")
             {
                 ConfigureMessageHandler = _ => CreateHttpClientHandler()
@@ -462,6 +496,7 @@ class Program
                     Console.WriteLine($"[System] => Too many requests. Retrying in 60 seconds.");
 
                     await Task.Delay(TimeSpan.FromSeconds(60));
+                    Thread.Sleep(60000);
                     return await GetAvailableTaps(devAuthData, tgWebAppData);
                 }
                 else
@@ -505,7 +540,7 @@ class Program
 
     static void ManageLogSize(string logFilePath)
     {
-        const long maxLogSize = 10 * 1024 * 1024; // 10 MB
+        const long maxLogSize = 5 * 1024 * 1024; // 10 MB
 
         lock (logLock)
         {
